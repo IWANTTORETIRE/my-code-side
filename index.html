@@ -1,27 +1,718 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-TW">
 <head>
-    <meta charset="UTF-8">
-    <title>我的程式碼展示</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
-    <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f0f0f0; }
-        .code-box { background: #2d2d2d; padding: 15px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
-    </style>
-</head>
-<body>
-    <h1>Gemini 程式碼展示</h1>
-    
-    <div class="code-box">
-        <pre><code class="language-javascript">
-// 把你想呈現的程式碼貼在這裡
-function hello() {
-    console.log("Hello World!");
-}
-hello();
-        </code></pre>
-    </div>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>醫療預約系統 MVP</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <style>
+    /* Custom scrollbar and animations */
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #f8fafc; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes zoomIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes slideInBottom { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+    .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+    .animate-zoom-in { animation: zoomIn 0.2s ease-out forwards; }
+    .animate-slide-in-right { animation: slideInRight 0.3s ease-out forwards; }
+    .animate-slide-in-bottom { animation: slideInBottom 0.2s ease-out forwards; }
+  </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-900">
+
+  <!-- Root container for the App -->
+  <div id="root"></div>
+
+  <script>
+    // --- 1. 資料與工具函式 (Data & Utils) ---
+    const MOCK_DOCTORS = [
+      { id: 'doc1', name: '李華 醫師', specialty: '心臟科', hospital: '中環康健中心' },
+      { id: 'doc2', name: '張志明 醫師', specialty: '牙科', hospital: '旺角專科診所' },
+    ];
+
+    const MOCK_PATIENT = { id: 'pat1', name: '陳大文', age: 32, phone: '9876-5432' };
+
+    const INITIAL_AVAILABILITY = [
+      { id: 's1', doctorId: 'doc1', date: '2023-11-20', time: '14:00', location: '中環康健中心 Room 301', isBooked: false },
+      { id: 's2', doctorId: 'doc1', date: '2023-11-20', time: '14:30', location: '中環康健中心 Room 301', isBooked: true },
+      { id: 's3', doctorId: 'doc1', date: '2023-11-20', time: '15:00', location: '中環康健中心 Room 301', isBooked: false },
+      { id: 's4', doctorId: 'doc2', date: '2023-11-21', time: '10:00', location: '旺角專科診所 2F', isBooked: false },
+    ];
+
+    const INITIAL_APPOINTMENTS = [
+      { id: 'a1', slotId: 's2', patientId: 'pat1', patientName: '陳大文', doctorId: 'doc1', status: 'confirmed', createdAt: '2023-11-19' }
+    ];
+
+    const formatDate = (date) => {
+      if (!date) return '';
+      const d = new Date(date);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
+    const addMinutes = (timeStr, mins) => {
+      if (!timeStr) return '00:00';
+      const [hh, mm] = timeStr.split(':').map(Number);
+      const date = new Date();
+      date.setHours(hh, mm + mins);
+      return date.toTimeString().slice(0, 5);
+    };
+
+    const isTimeBefore = (t1, t2) => {
+      if (!t1 || !t2) return false;
+      return parseInt(t1.replace(':', '')) < parseInt(t2.replace(':', ''));
+    };
+
+    const getSlotColor = (slot, viewType) => {
+      const isMonth = viewType === 'month';
+      if (!slot.isBooked) return isMonth ? 'bg-blue-50 border-blue-100 text-blue-600' : 'bg-blue-500 border-blue-600 text-white';
+      if (slot.status === 'pending') return isMonth ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-orange-500 border-orange-600 text-white';
+      return isMonth ? 'bg-green-50 border-green-200 text-green-700' : 'bg-green-600 border-green-700 text-white';
+    };
+
+    // --- 2. 全域狀態管理 (State Management) ---
+    let appState = {
+      user: null,
+      availabilities: [...INITIAL_AVAILABILITY],
+      appointments: [...INITIAL_APPOINTMENTS],
+      toasts: [],
+      // Doctor View State
+      docTab: 'schedule',
+      viewMode: 'month',
+      currentDate: new Date(),
+      // Modal State
+      isModalOpen: false,
+      modalMode: 'single',
+      modalData: {
+        date: formatDate(new Date()),
+        startDate: formatDate(new Date()),
+        endDate: formatDate(new Date(Date.now() + 7 * 86400000)),
+        selectedDays: [1, 2, 3, 4, 5],
+        startTime: '09:00',
+        endTime: '12:00',
+        hasBreak: false,
+        breakStart: '12:00',
+        breakEnd: '13:00',
+        duration: 30,
+        location: ''
+      }
+    };
+
+    // 重新渲染函式
+    function render() {
+      document.getElementById('root').innerHTML = App();
+      lucide.createIcons(); // Initialize Lucide Icons
+    }
+
+    // --- 3. 業務邏輯函式 (Global Methods) ---
+    window.login = function(role) {
+      if (role === 'doctor') {
+        appState.user = { role: 'doctor', ...MOCK_DOCTORS[0] };
+        appState.modalData.location = appState.user.hospital;
+      } else {
+        appState.user = { role: 'patient', ...MOCK_PATIENT };
+      }
+      render();
+    };
+
+    window.logout = function() {
+      appState.user = null;
+      appState.docTab = 'schedule';
+      render();
+    };
+
+    window.showToast = function(message, type = 'default') {
+      const id = Date.now();
+      appState.toasts.push({ id, message, type });
+      render();
+      setTimeout(() => {
+        appState.toasts = appState.toasts.filter(t => t.id !== id);
+        render();
+      }, 3000);
+    };
+
+    window.removeToast = function(id) {
+      appState.toasts = appState.toasts.filter(t => t.id !== id);
+      render();
+    };
+
+    // 醫師相關邏輯
+    window.navigateDate = function(dir) {
+      const d = new Date(appState.currentDate);
+      if (appState.viewMode === 'month') d.setMonth(d.getMonth() + dir);
+      else if (appState.viewMode === 'week') d.setDate(d.getDate() + dir * 7);
+      else d.setDate(d.getDate() + dir);
+      appState.currentDate = d;
+      render();
+    };
+
+    window.openAddModal = function(dateStr = null, timeStr = '09:00') {
+      const targetDate = dateStr || formatDate(new Date());
+      appState.modalData = {
+        ...appState.modalData,
+        date: targetDate,
+        startDate: targetDate,
+        endDate: formatDate(new Date(new Date(targetDate).getTime() + 7 * 86400000)),
+        startTime: timeStr,
+        endTime: addMinutes(timeStr, 60),
+        location: appState.user.hospital
+      };
+      appState.isModalOpen = true;
+      appState.modalMode = 'single';
+      render();
+    };
+
+    window.updateModalInput = function(field, value, shouldRender = false) {
+      appState.modalData[field] = value;
+      if (shouldRender) render();
+    };
+
+    window.toggleDay = function(dayIndex) {
+      const days = appState.modalData.selectedDays;
+      if (days.includes(dayIndex)) {
+        appState.modalData.selectedDays = days.filter(d => d !== dayIndex);
+      } else {
+        appState.modalData.selectedDays.push(dayIndex);
+      }
+      render();
+    };
+
+    window.saveSchedule = function() {
+      const d = appState.modalData;
+      let newSlots = [];
+      const gen = (dateStr) => {
+        let t = d.startTime, res = [];
+        while (isTimeBefore(t, d.endTime)) {
+          const next = addMinutes(t, d.duration);
+          if (!isTimeBefore(d.endTime, next) && next !== d.endTime && isTimeBefore(d.endTime, t)) break;
+          if (!(d.hasBreak && isTimeBefore(t, d.breakEnd) && isTimeBefore(d.breakStart, next))) {
+            res.push({ 
+              id: `s_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`, 
+              date: dateStr, time: t, location: d.location, isBooked: false, doctorId: appState.user.id 
+            });
+          }
+          t = next;
+        }
+        return res;
+      };
+
+      if (appState.modalMode === 'single') {
+        newSlots = gen(d.date);
+      } else {
+        let curr = new Date(d.startDate), end = new Date(d.endDate);
+        while (curr <= end) {
+          if (d.selectedDays.includes(curr.getDay())) newSlots = [...newSlots, ...gen(formatDate(curr))];
+          curr.setDate(curr.getDate() + 1);
+        }
+      }
+
+      const filtered = newSlots.filter(n => !appState.availabilities.some(old => old.doctorId === appState.user.id && old.date === n.date && old.time === n.time));
+      
+      if (filtered.length > 0) {
+        appState.availabilities = [...appState.availabilities, ...filtered];
+        window.showToast(`成功新增 ${filtered.length} 個排班時段`, 'success');
+      } else {
+        window.showToast('沒有產生新的排班時段 (可能重複)', 'error');
+      }
+      appState.isModalOpen = false;
+      render();
+    };
+
+    window.deleteSlot = function(id) {
+      appState.availabilities = appState.availabilities.filter(s => s.id !== id);
+      window.showToast('已刪除時段');
+      render();
+    };
+
+    window.updateApptStatus = function(apptId, slotId, status) {
+      appState.appointments = appState.appointments.map(a => a.id === apptId ? { ...a, status } : a);
+      if (status === 'rejected') {
+        appState.availabilities = appState.availabilities.map(s => s.id === slotId ? { ...s, isBooked: false } : s);
+        window.showToast('已拒絕預約');
+      } else {
+        window.showToast('已確認預約', 'success');
+      }
+      render();
+    };
+
+    // 病人相關邏輯
+    window.bookSlot = function(slotId, doctorId) {
+      if (appState.appointments.some(a => a.slotId === slotId && a.status !== 'cancelled' && a.patientId === appState.user.id)) {
+        window.showToast('您已經預約了此時段', 'error');
+        return;
+      }
+      appState.appointments.push({
+        id: `a_${Date.now()}`,
+        patientId: appState.user.id,
+        patientName: appState.user.name,
+        doctorId: doctorId,
+        slotId: slotId,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      });
+      appState.availabilities = appState.availabilities.map(x => x.id === slotId ? { ...x, isBooked: true } : x);
+      window.showToast('預約請求已發送！', 'success');
+      render();
+    };
+
+    window.cancelAppointment = function(apptId, slotId) {
+      if (!confirm('確定要取消此預約嗎？')) return;
+      appState.appointments = appState.appointments.filter(a => a.id !== apptId);
+      appState.availabilities = appState.availabilities.map(s => s.id === slotId ? { ...s, isBooked: false } : s);
+      window.showToast('已取消預約');
+      render();
+    };
+
+    // 取得展示用的天數
+    const getDisplayDays = () => {
+      const start = new Date(appState.currentDate);
+      if (appState.viewMode === 'month') {
+        start.setDate(1);
+        start.setDate(start.getDate() - start.getDay());
+        return Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d; });
+      } else if (appState.viewMode === 'week') {
+        start.setDate(start.getDate() - start.getDay());
+        return Array.from({ length: 7 }, (_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d; });
+      }
+      return [new Date(appState.currentDate)];
+    };
+
+    const getSlotsForDate = (dateStr) => {
+      return appState.availabilities
+        .filter(s => s.doctorId === appState.user.id && s.date === dateStr)
+        .map(slot => {
+          const appt = appState.appointments.find(a => a.slotId === slot.id && ['pending', 'confirmed'].includes(a.status));
+          return { ...slot, status: appt ? appt.status : (slot.isBooked ? 'confirmed' : 'available') };
+        })
+        .sort((a, b) => a.time.localeCompare(b.time));
+    };
+
+    // --- 4. 渲染組件 (Render Templates) ---
+
+    const EmptyStateHtml = (iconName, message) => `
+      <div class="flex flex-col items-center justify-center py-12 text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+        <i data-lucide="${iconName}" class="w-10 h-10 mb-2 opacity-50"></i>
+        <p class="text-sm">${message}</p>
+      </div>
+    `;
+
+    function renderLogin() {
+      return `
+        <div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+          <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md space-y-6 border border-slate-100 animate-zoom-in">
+            <div class="text-center space-y-2">
+              <div class="bg-blue-600 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200">
+                <i data-lucide="stethoscope" class="text-white w-8 h-8"></i>
+              </div>
+              <h1 class="text-2xl font-bold text-slate-800">線上預約掛號系統</h1>
+              <p class="text-slate-500">請選擇登入身分 (模擬演示)</p>
+            </div>
+            <div class="space-y-4">
+              <button onclick="window.login('doctor')" class="w-full flex items-center justify-center space-x-3 p-4 bg-white border-2 border-slate-200 rounded-xl hover:border-blue-600 hover:bg-blue-50 transition-all group shadow-sm hover:shadow-md">
+                <div class="bg-slate-100 p-2 rounded-full group-hover:bg-blue-100 transition-colors"><i data-lucide="user" class="text-slate-600 group-hover:text-blue-600 w-5 h-5"></i></div>
+                <div class="text-left"><p class="font-bold text-slate-700 group-hover:text-blue-700">我是醫師</p><p class="text-xs text-slate-400">設定當值時間、管理預約</p></div>
+              </button>
+              <button onclick="window.login('patient')" class="w-full flex items-center justify-center space-x-3 p-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all">
+                <div class="bg-white/20 p-2 rounded-full"><i data-lucide="calendar" class="w-5 h-5"></i></div>
+                <div class="text-left"><p class="font-bold">我是病人</p><p class="text-xs text-blue-100">搜尋醫師、預約看診</p></div>
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderScheduleModal() {
+      if (!appState.isModalOpen) return '';
+      const d = appState.modalData;
+      const mode = appState.modalMode;
+
+      return `
+        <div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div class="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-zoom-in">
+            <div class="bg-slate-50 px-6 py-4 border-b flex justify-between items-center">
+              <h3 class="font-bold text-slate-800">新增排班</h3>
+              <button onclick="appState.isModalOpen=false; render()"><i data-lucide="x" class="w-5 h-5 text-slate-400 hover:text-slate-600"></i></button>
+            </div>
+            <div class="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+              <div class="flex bg-slate-100 p-1 rounded-lg">
+                <button onclick="appState.modalMode='single'; render()" class="flex-1 py-1.5 text-sm font-medium rounded transition-all flex justify-center items-center gap-1 ${mode === 'single' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}">單日新增</button>
+                <button onclick="appState.modalMode='bulk'; render()" class="flex-1 py-1.5 text-sm font-medium rounded transition-all flex justify-center items-center gap-1 ${mode === 'bulk' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}"><i data-lucide="repeat" class="w-3.5 h-3.5"></i>批量重複</button>
+              </div>
+              
+              ${mode === 'single' ? `
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">日期</label>
+                  <input type="date" value="${d.date}" onchange="window.updateModalInput('date', this.value)" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                </div>
+              ` : `
+                <div class="space-y-3">
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">開始日期</label>
+                      <input type="date" value="${d.startDate}" onchange="window.updateModalInput('startDate', this.value)" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">結束日期</label>
+                      <input type="date" value="${d.endDate}" onchange="window.updateModalInput('endDate', this.value)" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                    </div>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">重複</label>
+                    <div class="flex justify-between gap-1">
+                      ${['日', '一', '二', '三', '四', '五', '六'].map((day, i) => `
+                        <button onclick="window.toggleDay(${i})" class="w-8 h-8 rounded-full text-xs font-bold border transition-colors ${d.selectedDays.includes(i) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-400'}">${day}</button>
+                      `).join('')}
+                    </div>
+                  </div>
+                </div>
+              `}
+              
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">開始時間</label>
+                  <input type="time" value="${d.startTime}" onchange="window.updateModalInput('startTime', this.value)" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">結束時間</label>
+                  <input type="time" value="${d.endTime}" onchange="window.updateModalInput('endTime', this.value)" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                </div>
+              </div>
+              
+              <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <div class="flex items-center gap-2 mb-2">
+                  <input type="checkbox" id="hasBreak" ${d.hasBreak ? 'checked' : ''} onchange="window.updateModalInput('hasBreak', this.checked, true)" class="w-4 h-4 text-blue-600 rounded" />
+                  <label for="hasBreak" class="text-sm font-bold text-slate-700 cursor-pointer select-none">設定中間休息時間</label>
+                </div>
+                ${d.hasBreak ? `
+                  <div class="grid grid-cols-2 gap-3 animate-fade-in">
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">休息開始</label>
+                      <input type="time" value="${d.breakStart}" onchange="window.updateModalInput('breakStart', this.value)" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">休息結束</label>
+                      <input type="time" value="${d.breakEnd}" onchange="window.updateModalInput('breakEnd', this.value)" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+              
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">單節 (分)</label>
+                  <input type="number" step="5" value="${d.duration}" onchange="window.updateModalInput('duration', Number(this.value))" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">地點</label>
+                  <input type="text" value="${d.location}" onchange="window.updateModalInput('location', this.value)" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                </div>
+              </div>
+            </div>
+            
+            <div class="p-4 border-t flex justify-end gap-2 bg-slate-50">
+              <button onclick="appState.isModalOpen = false; render()" class="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium transition-colors">取消</button>
+              <button onclick="window.saveSchedule()" class="px-6 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all">儲存排班</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderMonthView() {
+      const days = getDisplayDays();
+      let header = ['日', '一', '二', '三', '四', '五', '六'].map((d, i) => 
+        `<div class="py-2 text-center text-xs font-bold ${i===0 || i===6 ? 'text-red-400' : 'text-slate-500'}">週${d}</div>`
+      ).join('');
+
+      let grid = days.map((day) => {
+        const dateStr = formatDate(day);
+        const slots = getSlotsForDate(dateStr);
+        const isCurrMonth = day.getMonth() === appState.currentDate.getMonth();
+        const isToday = formatDate(new Date()) === dateStr;
+
+        let slotsHtml = slots.slice(0, 3).map(s => `
+          <div class="flex justify-between items-center px-1.5 py-0.5 rounded text-[10px] border shadow-sm transition-all ${getSlotColor(s, 'month')}">
+            <span class="font-mono">${s.time}</span>
+            ${!s.isBooked ? `<button onclick="event.stopPropagation(); window.deleteSlot('${s.id}')" class="hover:text-red-500 hover:bg-red-50 rounded-full p-0.5"><i data-lucide="x" class="w-3 h-3"></i></button>` : ''}
+          </div>
+        `).join('');
+
+        let moreHtml = slots.length > 3 ? `<div class="text-[9px] text-center text-slate-400 font-medium">還有 ${slots.length - 3} 個...</div>` : '';
+
+        return `
+          <div class="min-h-[100px] p-1 flex flex-col cursor-pointer hover:bg-slate-50/50 transition-colors ${!isCurrMonth ? 'bg-slate-50/30 text-slate-300' : 'bg-white'}" onclick="window.openAddModal('${dateStr}')">
+            <div class="text-center mb-1">
+              <span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-medium ${isToday ? 'bg-blue-600 text-white shadow-md' : ''}">${day.getDate()}</span>
+            </div>
+            <div class="flex-1 space-y-1">
+              ${slotsHtml}
+              ${moreHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+          <div class="grid grid-cols-7 border-b border-slate-200 bg-slate-50">${header}</div>
+          <div class="grid grid-cols-7 divide-x divide-y divide-slate-100">${grid}</div>
+        </div>
+      `;
+    }
+
+    function renderWeekDayView() {
+      const days = getDisplayDays();
+      let header = '';
+      
+      if (appState.viewMode === 'week') {
+        header = `
+          <div class="flex border-b border-slate-200 bg-slate-50 shrink-0 pr-[6px]">
+            <div class="w-14 shrink-0 border-r border-slate-200"></div>
+            <div class="flex flex-1">
+              ${days.map(d => `
+                <div class="flex-1 text-center py-2 border-r border-slate-200 last:border-r-0">
+                  <div class="text-xs ${d.getDay()===0||d.getDay()===6 ? 'text-red-400':'text-slate-500'}">週${['日', '一', '二', '三', '四', '五', '六'][d.getDay()]}</div>
+                  <div class="text-sm font-bold ${formatDate(new Date()) === formatDate(d) ? 'text-blue-600' : 'text-slate-700'}">${d.getDate()}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      let timeCol = Array.from({ length: 13 }, (_, i) => i + 8).map(h => `
+        <div class="h-20 text-xs text-right pr-2 pt-1 border-b border-slate-200 relative text-slate-400">
+          <span class="-top-2.5 relative font-mono">${h}:00</span>
+        </div>
+      `).join('');
+
+      let colsHtml = days.map(d => {
+        const dateStr = formatDate(d);
+        let bgGrid = Array.from({ length: 13 }, (_, i) => i + 8).map(h => `
+          <div class="h-20 border-b border-slate-100 hover:bg-slate-50 transition-colors cursor-pointer" onclick="window.openAddModal('${dateStr}', '${String(h).padStart(2, '0')}:00')"></div>
+        `).join('');
+
+        let slotsHtml = getSlotsForDate(dateStr).map(s => {
+          const [h, m] = s.time.split(':').map(Number);
+          if (h < 8 || h > 20) return '';
+          return `
+            <div class="absolute left-1 right-1 rounded px-2 py-1 text-xs shadow-sm border group cursor-pointer z-10 transition-all hover:shadow-md hover:z-20 flex flex-col justify-center ${getSlotColor(s, 'week')}" style="top: ${(h - 8) * 80 + (m / 60) * 80}px; height: 35px;" onclick="event.stopPropagation()">
+              <div class="flex justify-between items-center w-full">
+                <span class="font-bold font-mono">${s.time}</span>
+                ${!s.isBooked ? `<button onclick="window.deleteSlot('${s.id}'); event.stopPropagation();" class="opacity-0 group-hover:opacity-100 text-white hover:bg-white/20 rounded-full p-0.5 transition-all"><i data-lucide="x" class="w-3 h-3"></i></button>` : `<i data-lucide="user" class="w-3 h-3"></i>`}
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        return `<div class="flex-1 border-r border-slate-100 relative min-w-[100px] group/col">${bgGrid}${slotsHtml}</div>`;
+      }).join('');
+
+      return `
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col h-[600px] overflow-hidden">
+          ${header}
+          <div class="flex flex-1 overflow-y-auto relative custom-scrollbar">
+            <div class="w-14 shrink-0 border-r bg-slate-50 sticky left-0 z-20">${timeCol}</div>
+            <div class="flex flex-1 relative min-w-0">${colsHtml}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDoctorDashboard() {
+      const pendingApps = appState.appointments.filter(a => a.doctorId === appState.user.id && a.status === 'pending');
+      const historyApps = appState.appointments.filter(a => a.doctorId === appState.user.id && a.status === 'confirmed');
+
+      let headerText = '';
+      const y = appState.currentDate.getFullYear();
+      const m = appState.currentDate.getMonth() + 1;
+      const d = appState.currentDate.getDate();
+      if (appState.viewMode === 'day') {
+        const dayName = ['日', '一', '二', '三', '四', '五', '六'][appState.currentDate.getDay()];
+        headerText = `${y}年 ${m}月 ${d}日 (週${dayName})`;
+      } else if (appState.viewMode === 'week') {
+        const start = new Date(appState.currentDate);
+        start.setDate(start.getDate() - start.getDay());
+        const end = new Date(start);
+        end.setDate(end.getDate() + 6);
+        headerText = `${start.getMonth() + 1}月${start.getDate()}日 - ${end.getMonth() + 1}月${end.getDate()}日`;
+      } else {
+        headerText = `${y}年 ${m}月`;
+      }
+
+      let tabContent = '';
+      if (appState.docTab === 'schedule') {
+        tabContent = `
+          <div class="space-y-4">
+            <div class="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+              <div class="flex gap-3 items-center flex-wrap">
+                <button onclick="window.openAddModal()" class="bg-slate-900 text-white px-3 py-2 rounded-lg flex gap-2 text-sm font-bold hover:bg-slate-800 transition-all shadow"><i data-lucide="plus" class="w-4 h-4"></i> 新增</button>
+                <button onclick="appState.currentDate = new Date(); render()" class="px-3 py-2 border rounded-lg text-sm font-medium hover:bg-slate-50">今天</button>
+                <div class="flex text-xs gap-3 px-3 border-l ml-2 border-slate-200">
+                  <span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-blue-500 rounded-sm"></div>可預約</span>
+                  <span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-orange-500 rounded-sm"></div>待確認</span>
+                  <span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-green-500 rounded-sm"></div>已確認</span>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <button onclick="window.navigateDate(-1)" class="p-1 hover:bg-slate-100 rounded-full"><i data-lucide="chevron-left"></i></button>
+                <span class="font-bold min-w-[180px] text-center text-slate-700">${headerText}</span>
+                <button onclick="window.navigateDate(1)" class="p-1 hover:bg-slate-100 rounded-full"><i data-lucide="chevron-right"></i></button>
+              </div>
+              <div class="flex bg-slate-100 p-1 rounded-lg">
+                ${['month:月', 'week:週', 'day:日'].map(m => {
+                  const [k, l] = m.split(':');
+                  return `<button onclick="appState.viewMode='${k}'; render()" class="px-3 py-1 text-sm font-medium rounded transition-all ${appState.viewMode === k ? 'bg-white shadow text-blue-600' : 'text-slate-500'}">${l}</button>`;
+                }).join('')}
+              </div>
+            </div>
+            ${appState.viewMode === 'month' ? renderMonthView() : renderWeekDayView()}
+          </div>
+        `;
+      } else if (appState.docTab === 'requests') {
+        tabContent = `<div class="space-y-3">
+          ${pendingApps.length === 0 ? EmptyStateHtml('check-circle-2', '目前無待確認的預約') : pendingApps.map(a => {
+            const slot = appState.availabilities.find(s => s.id === a.slotId);
+            return `
+              <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex justify-between items-center animate-slide-in-bottom">
+                <div><h4 class="font-bold text-slate-800">${a.patientName}</h4><p class="text-sm text-slate-500">${slot?.date} ${slot?.time} @ ${slot?.location}</p></div>
+                <div class="flex gap-2">
+                  <button onclick="window.updateApptStatus('${a.id}', '${a.slotId}', 'rejected')" class="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"><i data-lucide="x"></i></button>
+                  <button onclick="window.updateApptStatus('${a.id}', '${a.slotId}', 'confirmed')" class="p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200"><i data-lucide="check"></i></button>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>`;
+      } else {
+        tabContent = `
+          <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <table class="w-full text-left text-sm">
+              <thead><tr class="border-b border-slate-100"><th class="p-3 text-slate-500">病人</th><th class="p-3 text-slate-500">時間</th><th class="p-3 text-slate-500">狀態</th></tr></thead>
+              <tbody>
+                ${historyApps.map(a => {
+                  const slot = appState.availabilities.find(s => s.id === a.slotId);
+                  return `<tr class="border-b border-slate-50 last:border-0 hover:bg-slate-50"><td class="p-3 font-bold text-slate-700">${a.patientName}</td><td class="p-3 text-slate-600">${slot?.date} ${slot?.time}</td><td class="p-3 text-green-600 font-bold">成功</td></tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+            ${historyApps.length === 0 ? `<div class="py-8 text-center text-slate-400">暫無歷史紀錄</div>` : ''}
+          </div>
+        `;
+      }
+
+      return `
+        <div class="max-w-6xl mx-auto p-6 relative min-h-screen">
+          <div class="flex justify-between items-center mb-6">
+            <div><h2 class="text-2xl font-bold text-slate-800">醫師中心</h2><p class="text-slate-500">Hi, ${appState.user.name}</p></div>
+            <button onclick="window.logout()" class="text-red-500 flex gap-2 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"><i data-lucide="log-out" class="w-5 h-5"></i> 登出</button>
+          </div>
+          <div class="flex gap-2 mb-6">
+            ${['schedule:排班', 'requests:請求', 'history:紀錄'].map(t => {
+              const [k, l] = t.split(':');
+              return `<button onclick="appState.docTab='${k}'; render()" class="px-4 py-2 rounded-lg font-medium transition ${appState.docTab === k ? 'bg-blue-600 text-white shadow' : 'bg-white text-slate-500'}">${k === 'requests' ? `${l} (${pendingApps.length})` : l}</button>`;
+            }).join('')}
+          </div>
+          ${tabContent}
+          ${renderScheduleModal()}
+        </div>
+      `;
+    }
+
+    function renderPatientDashboard() {
+      const available = appState.availabilities.filter(s => !s.isBooked);
+      const myApps = appState.appointments.filter(a => a.patientId === appState.user.id);
+
+      return `
+        <div class="max-w-4xl mx-auto p-6 min-h-screen">
+          <div class="flex justify-between mb-6">
+            <h2 class="text-2xl font-bold text-slate-800">預約看診</h2>
+            <button onclick="window.logout()" class="text-red-500 flex gap-2 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"><i data-lucide="log-out" class="w-5 h-5"></i> 登出</button>
+          </div>
+          <div class="grid gap-6">
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 class="font-bold mb-3 text-slate-700">可預約時段</h3>
+              <div class="grid md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto custom-scrollbar">
+                ${available.length ? available.map(s => `
+                  <div class="p-3 border border-slate-200 rounded-lg flex justify-between items-center hover:border-blue-400 hover:shadow-sm transition-all bg-white">
+                    <div>
+                      <div class="font-bold text-slate-700">${MOCK_DOCTORS.find(d => d.id === s.doctorId)?.name}</div>
+                      <div class="text-sm text-slate-500">${s.date} ${s.time}</div>
+                    </div>
+                    <button onclick="window.bookSlot('${s.id}', '${s.doctorId}')" class="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm">預約</button>
+                  </div>
+                `).join('') : EmptyStateHtml('calendar', '目前無可預約時段')}
+              </div>
+            </div>
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 class="font-bold mb-3 text-slate-700">我的預約</h3>
+              <div class="space-y-2">
+                ${myApps.length > 0 ? myApps.map(a => {
+                  const slot = appState.availabilities.find(s => s.id === a.slotId) || {};
+                  return `
+                    <div class="p-3 border-b border-slate-50 last:border-0 flex justify-between items-center text-sm animate-slide-in-bottom bg-slate-50/50 rounded-lg">
+                      <div>
+                        <span class="font-bold block text-slate-800">${MOCK_DOCTORS.find(d => d.id === a.doctorId)?.name}</span>
+                        <span class="text-xs text-slate-500">${slot.date} ${slot.time}</span>
+                      </div>
+                      <div class="flex items-center gap-3">
+                        <span class="font-bold px-2 py-1 rounded-full text-[10px] ${a.status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}">
+                          ${a.status === 'confirmed' ? '成功' : '待確認'}
+                        </span>
+                        <button onclick="window.cancelAppointment('${a.id}', '${a.slotId}')" class="text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-md text-xs border border-red-200 hover:border-red-300 transition-all font-medium">取消</button>
+                      </div>
+                    </div>
+                  `;
+                }).join('') : EmptyStateHtml('history', '目前無預約紀錄')}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderToasts() {
+      return `
+        <div class="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none">
+          ${appState.toasts.map(toast => `
+            <div class="pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-lg shadow-xl border animate-slide-in-right ${toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-slate-800 border-slate-700 text-white'}">
+              <i data-lucide="${toast.type === 'error' ? 'alert-circle' : 'check-circle-2'}" class="w-5 h-5 ${toast.type !== 'error' ? 'text-green-400' : ''}"></i>
+              <span class="text-sm font-medium">${toast.message}</span>
+              <button onclick="window.removeToast(${toast.id})" class="ml-2 hover:opacity-70"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // 主渲染入口
+    function App() {
+      let content = '';
+      if (!appState.user) {
+        content = renderLogin();
+      } else if (appState.user.role === 'doctor') {
+        content = renderDoctorDashboard();
+      } else {
+        content = renderPatientDashboard();
+      }
+      return content + renderToasts();
+    }
+
+    // --- 5. 初始化應用程式 ---
+    window.onload = function() {
+      render();
+    };
+  </script>
 </body>
 </html>
